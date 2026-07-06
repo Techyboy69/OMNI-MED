@@ -1,0 +1,101 @@
+import time
+import threading
+import speech_recognition as sr
+
+class OmniMedVoiceTester:
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        
+        # 20-Second Volatile Memory Buffer (RAM list: [("text data", timestamp)])
+        self.rolling_memory = []
+        self.is_running = True
+        
+        # Target keywords jo hume pure 20 second ke loop mein se dhoondhne hain
+        self.TARGET_KEYWORDS = ["heart attack", "code blue", "heparin", "epinephrine", "anaphylaxis", "stroke"]
+
+    def clean_expired_memory(self):
+        """Pichle 20 seconds se purane saare data ko RAM se uda deta hai."""
+        current_time = time.time()
+        # Sirf wahi chunks rakho jinki umar 20 seconds se kam hai
+        self.rolling_memory = [chunk for chunk in self.rolling_memory if (current_time - chunk[1]) <= 20.0]
+
+    def scan_for_keywords(self):
+        """20 seconds ki combined memory mein string matching dhoondhta hai."""
+        # Pichle 20 second ki saari aawazo ke text ko ek sath jodo
+        combined_text = " ".join([chunk[0] for chunk in self.rolling_memory])
+        
+        if not combined_text.strip():
+            return
+            
+        print(f"\n⏳ [20s ACTIVE MEMORY COMPONENT] : \"{combined_text}\"")
+        
+        # Pure text block mein check karo hamare keywords hain ya nahi
+        found_keywords = []
+        for keyword in self.TARGET_KEYWORDS:
+            if keyword in combined_text:
+                found_keywords.append(keyword.upper())
+        
+        if found_keywords:
+            print(f"🎯 [MATCH FOUND] Inside 20s Window! Detected: {found_keywords}")
+            print(f"🚀 [COMMAND LOGIC] -> Ready to dispatch trigger to ESP32 for: {found_keywords}")
+        else:
+            print("🔍 [SCANNING] No matching medical emergency keywords inside the last 20 seconds.")
+
+    def start_microphone_stream(self):
+        """Real mic se input lekar use instantly text mein convert karta hai."""
+        print("[INIT] Calibrating microphone for background room noise... Ek second ruko.")
+        with self.microphone as source:
+            self.recognizer.adjust_for_ambient_noise(source, duration=2)
+        print("[ACTIVE] Mic Ready! Speak clearly (e.g., 'The patient has a heart attack, give heparin').\n")
+
+        while self.is_running:
+            try:
+                with self.microphone as source:
+                    # Chhote 3-second ke audio phrases capture karna taaki lag na aaye
+                    audio_data = self.recognizer.listen(source, phrase_time_limit=4)
+                
+                # Convert speech to text natively
+                raw_text = self.recognizer.recognize_google(audio_data).lower()
+                
+                if raw_text.strip():
+                    timestamp = time.time()
+                    # Data ko unique time tag ke sath RAM memory mein jodo
+                    self.rolling_memory.append((raw_text, timestamp))
+                    print(f"🎙️ [MIC CAPTURED] Heard right now: '{raw_text}'")
+                    
+            except sr.UnknownValueError:
+                # Agar mic ko samajh na aaye ya koi halki aawaz ho toh loop chalta rahega
+                continue
+            except sr.RequestError as e:
+                print(f"[ERROR] Connection Issue with STT Engine: {e}")
+                time.sleep(2)
+
+    def continuous_brain_scanner(self):
+        """Har 2 second mein active window filter karke text analyze karega."""
+        while self.is_running:
+            time.sleep(2)
+            # Step 1: Purana data delete karo
+            self.clean_expired_memory()
+            # Step 2: Baki bache 20s data mein keywords search karo
+            self.scan_for_keywords()
+
+    def boot(self):
+        # Threads ko background mein chalana taaki mic listen aur processing ek sath ho sake
+        t_mic = threading.Thread(target=self.start_microphone_stream, daemon=True)
+        t_brain = threading.Thread(target=self.continuous_brain_scanner, daemon=True)
+        
+        t_mic.start()
+        t_brain.start()
+        
+        # Keep main thread alive
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n[STOP] Shutting down testing suite.")
+            self.is_running = False
+
+if __name__ == "__main__":
+    tester = OmniMedVoiceTester()
+    tester.boot()
